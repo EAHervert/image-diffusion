@@ -1,0 +1,37 @@
+# Base training config for image-diffusion v0.
+# Overrides can be passed via CLI: python scripts/train.py train.lr=2e-4 data.batch_size=32
+
+data:
+  name: imagenette-128
+  root: data/imagenette2      # expects imagenette2/train/ and imagenette2/val/
+  image_size: 128
+  batch_size: 64
+  num_workers: 4
+
+model:
+  patch_size: 8
+  embed_dim: 384
+  depth: 12
+  num_heads: 6
+  num_classes: 10
+
+train:
+  steps: 100000
+  optimizer: adamw
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  warmup_steps: 1000
+  log_every: 100
+  ckpt_every: 5000
+  device: mps
+
+sample:
+  sampler: euler
+  num_steps: 50
+  cfg_scale: 0.0
+
+wandb:
+  project: image-diffusion
+  mode: disabled
