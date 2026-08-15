@@ -80,8 +80,7 @@ def main():
             # Log the lr rate for monitoring
             if train_step % cfg.train.log_every == 0:
                 lr = scheduler.get_last_lr()[0]
-            
-            print(f"step {train_step:>6d}  loss {loss.item():.4f}  lr {lr:.2e}")
+                print(f"step {train_step:>6d}  loss {loss.item():.4f}  lr {lr:.2e}")
 
             train_step += 1
 
