@@ -22,7 +22,7 @@ URL = "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-320.tgz"
 ARCHIVE_NAME = "imagenette2-320.tgz"
 EXTRACT_NAME = "imagenette2-320"
 
-EXPECTED_SHA256 = None  # TBD - e.g. "3df6f0d01f2c9e0c1b8f..."
+EXPECTED_SHA256 = "569b4497c98db6dd29f335d1f109cf315fe127053cedf69010d047f0188e158c"
 CHUNK = 2 ** 20  # 1 MiB
 
 
