@@ -222,3 +222,8 @@ __marimo__/
 # datasets
 data/
 .DS_Store
+
+__pycache__/
+*.egg-info/
+build/
+dist/
