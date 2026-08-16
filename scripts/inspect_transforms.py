@@ -20,12 +20,12 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.utils import make_grid, save_image
 
-IMAGE_SIZE = 128
+from image_diffusion.data import denormalize as denorm
 
-# These are the shift and scale of an affine map:
-#   out = (in - SHIFT) / SCALE = 2 * in - 1, [0, 1] -> [-1, 1].
-SHIFT = (0.5, 0.5, 0.5)
-SCALE = (0.5, 0.5, 0.5)
+# Normalize [0, 1] -> [-1, 1] via (x - 0.5) / 0.5, applied per channel.
+from image_diffusion.data import IMAGENETTE_SHIFT, IMAGENETTE_SCALE
+
+IMAGE_SIZE = 128
 
 # RandomResizedCrop configs, kept ONLY as diagnostics.
 RRC_CANDIDATES = {
@@ -130,7 +130,7 @@ def _tail():
     """Shared terminal stages: PIL -> float tensor [0,1] -> affine map to [-1,1]."""
     return [
         transforms.ToTensor(),
-        transforms.Normalize(mean=SHIFT, std=SCALE),
+        transforms.Normalize(mean=IMAGENETTE_SHIFT, std=IMAGENETTE_SCALE),
     ]
 
 
@@ -177,11 +177,6 @@ def make_transform(mode="train", scale=None, ratio=None):
         raise ValueError(f"unknown mode: {mode!r}")
 
     return transforms.Compose(head + _tail())
-
-
-def denorm(x):
-    """Inverse of the SHIFT/SCALE map: [-1, 1] -> [0, 1] for viewing."""
-    return (x * 0.5 + 0.5).clamp(0, 1)
 
 
 def report_tensor_stats(paths, seed=0, batch_size=256):

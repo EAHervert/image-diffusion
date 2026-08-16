@@ -77,6 +77,18 @@ def _seed_worker(_worker_id):
     random.seed(worker_seed)
 
 
+def denormalize(x):
+    """Map a normalized tensor back to [0, 1] for viewing or saving.
+
+    Inverse of the affine map _build_transforms applies. Derived from
+    IMAGENETTE_SHIFT/SCALE rather than hardcoding 0.5 so the forward and
+    inverse maps cannot drift apart. Accepts (C, H, W) or (B, C, H, W).
+    """
+    shift = torch.tensor(IMAGENETTE_SHIFT, dtype=x.dtype, device=x.device)
+    scale = torch.tensor(IMAGENETTE_SCALE, dtype=x.dtype, device=x.device)
+    return (x * scale.view(-1, 1, 1) + shift.view(-1, 1, 1)).clamp(0, 1)
+
+
 def _build_transforms(split, image_size=128, hflip=True) -> transforms.Compose:
     """Augmentation/normalization pipeline for a split."""
     if split == "train":

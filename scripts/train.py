@@ -8,6 +8,7 @@ Usage:
 import argparse
 import torch
 import torch.optim as optim
+import time
 from omegaconf import OmegaConf
 
 from image_diffusion.data import build_imagenette_loader
@@ -21,10 +22,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/base.yaml")
     parser.add_argument("overrides", nargs="*")
+    parser.add_argument("--config-data", type=str, default=None)
+
     args = parser.parse_args()
 
     # Load config and override with terminal arguments
     cfg = OmegaConf.load(args.config)
+    if args.config_data:
+        cfg = OmegaConf.merge(cfg, OmegaConf.load(args.config_data))
+
     if args.overrides:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.overrides))
 
@@ -36,7 +42,8 @@ def main():
     # Dataloader - training data
     dataloader = build_imagenette_loader(
         root=cfg.data.root, split="train", batch_size=cfg.data.batch_size,
-        num_workers=cfg.data.num_workers, image_size=cfg.data.image_size
+        num_workers=cfg.data.num_workers, image_size=cfg.data.image_size, 
+        hflip=cfg.data.hflip,
         )
 
     # DiT model
@@ -60,6 +67,7 @@ def main():
 
     # Perform the training loop - manual count of the loops though the dataloader
     train_step = 0
+    t_last = time.perf_counter()
     while train_step < int(cfg.train.steps):
         for x_1, y in dataloader:
             # Move batch to device
@@ -79,11 +87,23 @@ def main():
 
             # Log the lr rate for monitoring
             if train_step % cfg.train.log_every == 0:
+                if device.type == "mps":
+                    torch.mps.synchronize()
+                elif device.type == "cuda":
+                    torch.cuda.synchronize()
+
+                now = time.perf_counter()
+                n = cfg.train.log_every if train_step else 1
+                ms = 1000.0 * (now - t_last) / n
+                t_last = now
+
                 lr = scheduler.get_last_lr()[0]
-                print(f"step {train_step:>6d}  loss {loss.item():.4f}  lr {lr:.2e}")
+                print(f"step {train_step:>6d}  loss {loss.item():.4f}  "
+                    f"lr {lr:.2e}  {ms:7.1f} ms/step")
 
             train_step += 1
-
+            if train_step >= int(cfg.train.steps):
+                break
 
 if __name__ == "__main__":
     main()
