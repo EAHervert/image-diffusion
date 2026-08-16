@@ -293,7 +293,7 @@ class Embedding(nn.Module):
     @staticmethod
     def encode_1d(pos, d):
         # pos: (n,); d: even -> returns (n, d) sinusoidal frequencies
-        omega = 1.0 / (10000 ** (torch.arange(0, d, 2, dtype=torch.float32) / d))
+        omega = 1.0 / (10000 ** (torch.arange(0, d, 2, device=pos.device, dtype=pos.dtype) / d))
         angles = pos.unsqueeze(1) * omega.unsqueeze(0)   # (n, 1) * (1, d/2) -> (n, d/2)
         return torch.cat([angles.sin(), angles.cos()], dim=-1)
 

@@ -1,0 +1,15 @@
+# ImageNette-128 - primary local dataset.
+data:
+  name: imagenette-128
+  root: data/imagenette2-320
+  image_size: 128
+  num_classes: 10
+  batch_size: 64
+  num_workers: 4
+  hflip: true
+  # Affine map to [-1, 1], NOT dataset statistics. Passed through to
+  # torchvision Normalize as mean=shift, std=scale.
+  normalize_shift: [0.5, 0.5, 0.5]
+  normalize_scale: [0.5, 0.5, 0.5]
+  split_seed: 1234
+  val_test_frac: 0.5
