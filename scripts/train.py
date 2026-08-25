@@ -12,8 +12,10 @@ import time
 import os
 from pathlib import Path
 from omegaconf import OmegaConf
+from torchvision.utils import make_grid, save_image
 
-from image_diffusion.data import build_imagenette_loader
+from image_diffusion import REGISTRY
+from image_diffusion.data import build_imagenette_loader, denormalize
 from image_diffusion.flow import sample_triple, flow_matching_loss
 from image_diffusion.model import DiT
 
@@ -84,6 +86,28 @@ def main():
         os.replace(tmp, path)
         print(f"saved {path}")
 
+    N_BUCKETS = 5
+    GRID_EVERY = int(cfg.train.get("grid_every", 1000))
+    bucket_sum = torch.zeros(N_BUCKETS)
+    bucket_cnt = torch.zeros(N_BUCKETS)
+
+    grid_dir = Path("docs/assets")
+    grid_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fixed noise and labels, drawn once: every grid differs only by the weights.
+    _g = torch.Generator().manual_seed(0)
+    y_grid = torch.arange(cfg.data.num_classes).repeat_interleave(2).to(device)
+    x_grid = torch.randn(len(y_grid), 3, cfg.data.image_size, cfg.data.image_size, generator=_g).to(device)
+
+    def save_grid(tag):
+        model.eval()
+        sampler = REGISTRY[cfg.sample.sampler]
+        x_out = sampler(model, x_grid, y_grid, cfg.sample.num_steps)
+        out = grid_dir / f"samples_train_{tag}.png"
+        save_image(make_grid(denormalize(x_out).cpu(), nrow=2), out)
+        model.train()
+        print(f"saved {out}")
+
     # Perform the training loop - manual count of the loops though the dataloader
     train_step = 0
     t_last = time.perf_counter()
@@ -99,6 +123,13 @@ def main():
 
             # Calculate loss and adjust weights based on said loss
             loss = flow_matching_loss(v_pred, v_target)  # MSE loss
+
+            with torch.no_grad():
+                per_sample = ((v_pred - v_target) ** 2).flatten(1).mean(1)
+                idx = (t * N_BUCKETS).long().clamp_(0, N_BUCKETS - 1).cpu()
+                bucket_sum.index_add_(0, idx, per_sample.cpu())
+                bucket_cnt.index_add_(0, idx, torch.ones(len(idx)))
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -117,18 +148,27 @@ def main():
                 t_last = now
 
                 lr = scheduler.get_last_lr()[0]
+                means = (bucket_sum / bucket_cnt.clamp(min=1)).tolist()
+                bstr = "  ".join(f"t{i}:{m:.3f}" for i, m in enumerate(means))
                 print(f"step {train_step:>6d}  loss {loss.item():.4f}  "
-                    f"lr {lr:.2e}  {ms:7.1f} ms/step")
+                        f"lr {lr:.2e}  {ms:7.1f} ms/step  |  {bstr}")
+                bucket_sum.zero_()
+                bucket_cnt.zero_()
 
             train_step += 1
 
             if train_step % int(cfg.train.ckpt_every) == 0:
                 save_ckpt(f"{train_step:06d}")
 
+            if train_step % GRID_EVERY == 0:
+                save_grid(f"{train_step:06d}")
+                t_last = time.perf_counter()   # don't bill the grid to ms/step
+
             if train_step >= int(cfg.train.steps):
                 break
 
     save_ckpt("last")
+    save_grid("last")
 
 
 if __name__ == "__main__":
