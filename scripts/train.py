@@ -9,6 +9,8 @@ import argparse
 import torch
 import torch.optim as optim
 import time
+import os
+from pathlib import Path
 from omegaconf import OmegaConf
 
 from image_diffusion.data import build_imagenette_loader
@@ -65,6 +67,23 @@ def main():
         optimizer, start_factor=1e-6, end_factor=1.0,
         total_iters=cfg.train.warmup_steps,)
 
+    ckpt_dir = Path("checkpoints")
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    def save_ckpt(tag):
+        path = ckpt_dir / f"ckpt_{tag}.pt"
+        ckpt = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "step": train_step,
+            "config": OmegaConf.to_container(cfg, resolve=True),
+        }
+        tmp = path.with_suffix(".tmp")
+        torch.save(ckpt, tmp)
+        os.replace(tmp, path)
+        print(f"saved {path}")
+
     # Perform the training loop - manual count of the loops though the dataloader
     train_step = 0
     t_last = time.perf_counter()
@@ -102,8 +121,15 @@ def main():
                     f"lr {lr:.2e}  {ms:7.1f} ms/step")
 
             train_step += 1
+
+            if train_step % int(cfg.train.ckpt_every) == 0:
+                save_ckpt(f"{train_step:06d}")
+
             if train_step >= int(cfg.train.steps):
                 break
+
+    save_ckpt("last")
+
 
 if __name__ == "__main__":
     main()

@@ -13,7 +13,7 @@ model:
   embed_dim: 384
   depth: 12
   num_heads: 6
-  num_classes: 10
+  num_classes: 11
 
 train:
   steps: 100000
