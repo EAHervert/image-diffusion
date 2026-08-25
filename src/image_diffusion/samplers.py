@@ -3,6 +3,11 @@ Solving dx/dt = v(x, t; y) using three methods:
 - Euler method
 - Heun method
 - Runge-Kutta 4
+
+Where
+- x: ODE state (noise to image)
+- t: time (continuous)
+- y: class label
 """
 
 import torch
@@ -64,3 +69,11 @@ def rk4(velocity_fn, x, y, num_steps, t0=0.0, t1=1.0) -> torch.Tensor:
         x = x + (h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
     return x
+
+
+# Registry: name -> function object
+REGISTRY = {
+    "euler": euler,
+    "heun": heun,
+    "rk4": rk4,
+}
