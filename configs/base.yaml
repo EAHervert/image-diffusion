@@ -5,7 +5,7 @@ data:
   name: imagenette-128
   root: data/imagenette2      # expects imagenette2/train/ and imagenette2/val/
   image_size: 128
-  batch_size: 64
+  batch_size: 16
   num_workers: 4
 
 model:
@@ -16,21 +16,24 @@ model:
   num_classes: 11
 
 train:
-  steps: 100000
+  seed: 0
+  steps: 100_000
   optimizer: adamw
   lr: 1.0e-4
   weight_decay: 0.0
   betas: [0.9, 0.999]
   eps: 1.0e-8
-  warmup_steps: 1000
+  warmup_frac: 0.01
   log_every: 100
-  ckpt_every: 5000
+  ckpt_every: 5_000
+  grid_every: 1_000
   device: mps
 
 sample:
   sampler: euler
   num_steps: 50
   cfg_scale: 0.0
+  samples_per_class: 2
 
 wandb:
   project: image-diffusion

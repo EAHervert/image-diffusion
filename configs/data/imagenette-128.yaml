@@ -4,7 +4,7 @@ data:
   root: data/imagenette2-320
   image_size: 128
   num_classes: 10
-  batch_size: 64
+  batch_size: 16
   num_workers: 4
   hflip: true
   # Affine map to [-1, 1], NOT dataset statistics. Passed through to

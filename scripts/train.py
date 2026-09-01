@@ -40,8 +40,15 @@ def main():
 
     print(OmegaConf.to_yaml(cfg))  # print resolved config so runs are self-documenting
 
+    for k in ("num_classes", "hflip", "root"):
+        if k not in cfg.data:
+            raise KeyError(f"cfg.data.{k} missing!")
+
     # Device casting
     device = torch.device(cfg.train.device)
+
+    # Random seed for everyone
+    torch.manual_seed(cfg.train.seed)
 
     # Dataloader - training data
     dataloader = build_imagenette_loader(
@@ -65,9 +72,10 @@ def main():
         model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay,
         betas=tuple(cfg.train.betas), eps=cfg.train.eps,)
 
-    scheduler = optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=1e-6, end_factor=1.0,
-        total_iters=cfg.train.warmup_steps,)
+    warmup = max(1, int(cfg.train.warmup_frac * cfg.train.steps))
+    scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-6, end_factor=1.0, 
+        total_iters=warmup,)
 
     ckpt_dir = Path("checkpoints")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -86,27 +94,35 @@ def main():
         os.replace(tmp, path)
         print(f"saved {path}")
 
-    N_BUCKETS = 5
+    # Split the t values into N_Bins to evaluate differing levels of noise
+    N_BINS = 5
     GRID_EVERY = int(cfg.train.get("grid_every", 1000))
-    bucket_sum = torch.zeros(N_BUCKETS)
-    bucket_cnt = torch.zeros(N_BUCKETS)
+    bin_sum = torch.zeros(N_BINS)
+    bin_cnt = torch.zeros(N_BINS)
+    BIN_LABELS = ["B1 [0.0-0.2]", "B2 [0.2-0.4]", "B3 [0.4-0.6]",
+                "B4 [0.6-0.8]", "B5 [0.8-1.0]"]
 
     grid_dir = Path("docs/assets")
     grid_dir.mkdir(parents=True, exist_ok=True)
 
-    # Fixed noise and labels, drawn once: every grid differs only by the weights.
+    # Fixed noise and labels, drawn once: every grid differs only by the weights
     _g = torch.Generator().manual_seed(0)
     y_grid = torch.arange(cfg.data.num_classes).repeat_interleave(2).to(device)
     x_grid = torch.randn(len(y_grid), 3, cfg.data.image_size, cfg.data.image_size, generator=_g).to(device)
 
+    @torch.no_grad()
     def save_grid(tag):
+        # Model switches to eval mode for generating image grids/.
         model.eval()
         sampler = REGISTRY[cfg.sample.sampler]
         x_out = sampler(model, x_grid, y_grid, cfg.sample.num_steps)
         out = grid_dir / f"samples_train_{tag}.png"
         save_image(make_grid(denormalize(x_out).cpu(), nrow=2), out)
-        model.train()
+
         print(f"saved {out}")
+
+        # Switch back to training mode
+        model.train()
 
     # Perform the training loop - manual count of the loops though the dataloader
     train_step = 0
@@ -126,9 +142,9 @@ def main():
 
             with torch.no_grad():
                 per_sample = ((v_pred - v_target) ** 2).flatten(1).mean(1)
-                idx = (t * N_BUCKETS).long().clamp_(0, N_BUCKETS - 1).cpu()
-                bucket_sum.index_add_(0, idx, per_sample.cpu())
-                bucket_cnt.index_add_(0, idx, torch.ones(len(idx)))
+                idx = (t * N_BINS).long().clamp_(0, N_BINS - 1).cpu()
+                bin_sum.index_add_(0, idx, per_sample.cpu())
+                bin_cnt.index_add_(0, idx, torch.ones(len(idx)))
 
             optimizer.zero_grad()
             loss.backward()
@@ -148,12 +164,12 @@ def main():
                 t_last = now
 
                 lr = scheduler.get_last_lr()[0]
-                means = (bucket_sum / bucket_cnt.clamp(min=1)).tolist()
-                bstr = "  ".join(f"t{i}:{m:.3f}" for i, m in enumerate(means))
+                means = (bin_sum / bin_cnt.clamp(min=1)).tolist()
+                bstr = "  ".join(f"{BIN_LABELS[i]}:{m:.3f}" for i, m in enumerate(means))
                 print(f"step {train_step:>6d}  loss {loss.item():.4f}  "
                         f"lr {lr:.2e}  {ms:7.1f} ms/step  |  {bstr}")
-                bucket_sum.zero_()
-                bucket_cnt.zero_()
+                bin_sum.zero_()
+                bin_cnt.zero_()
 
             train_step += 1
 
