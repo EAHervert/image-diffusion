@@ -10,6 +10,7 @@ import torch
 import torch.optim as optim
 import time
 import os
+import math
 from pathlib import Path
 from omegaconf import OmegaConf
 from torchvision.utils import make_grid, save_image
@@ -27,22 +28,30 @@ def main():
     parser.add_argument("--config", type=str, default="configs/base.yaml")
     parser.add_argument("overrides", nargs="*")
     parser.add_argument("--config-data", type=str, default=None)
+    parser.add_argument("--resume", type=str, default=None)
 
     args = parser.parse_args()
 
     # Load config and override with terminal arguments
     cfg = OmegaConf.load(args.config)
+
     if args.config_data:
         cfg = OmegaConf.merge(cfg, OmegaConf.load(args.config_data))
+
+    OmegaConf.set_struct(cfg, True)
 
     if args.overrides:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.overrides))
 
-    print(OmegaConf.to_yaml(cfg))  # print resolved config so runs are self-documenting
+    print(OmegaConf.to_yaml(cfg))
 
     for k in ("num_classes", "hflip", "root"):
         if k not in cfg.data:
             raise KeyError(f"cfg.data.{k} missing!")
+
+    for k in ("steps", "lr", "seed", "grid_every"):
+        if k not in cfg.train:
+            raise KeyError(f"cfg.train.{k} missing!")
 
     # Device casting
     device = torch.device(cfg.train.device)
@@ -96,7 +105,7 @@ def main():
 
     # Split the t values into N_Bins to evaluate differing levels of noise
     N_BINS = 5
-    GRID_EVERY = int(cfg.train.get("grid_every", 1000))
+    GRID_EVERY = int(cfg.train.grid_every)
     bin_sum = torch.zeros(N_BINS)
     bin_cnt = torch.zeros(N_BINS)
     BIN_LABELS = ["B1 [0.0-0.2]", "B2 [0.2-0.4]", "B3 [0.4-0.6]",
@@ -110,23 +119,57 @@ def main():
     y_grid = torch.arange(cfg.data.num_classes).repeat_interleave(2).to(device)
     x_grid = torch.randn(len(y_grid), 3, cfg.data.image_size, cfg.data.image_size, generator=_g).to(device)
 
+    # CSV for loss curve
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = log_dir / f"metrics_{time.strftime('%Y%m%d-%H%M%S')}.csv"
+    csv_file = csv_path.open("w", buffering=1)   # line-buffered: survives a crash
+    csv_file.write("step,loss,lr,ms_per_step," + ",".join(f"b{i+1}" for i in range(N_BINS)) + "\n")
+
+    print(f"logging metrics to {csv_path}\n")
+
     @torch.no_grad()
     def save_grid(tag):
-        # Model switches to eval mode for generating image grids/.
+        # Model switches to eval mode for generating image grids.
         model.eval()
-        sampler = REGISTRY[cfg.sample.sampler]
-        x_out = sampler(model, x_grid, y_grid, cfg.sample.num_steps)
-        out = grid_dir / f"samples_train_{tag}.png"
-        save_image(make_grid(denormalize(x_out).cpu(), nrow=2), out)
 
-        print(f"saved {out}")
+        try:
+            if cfg.sample.sampler not in REGISTRY:
+                raise KeyError(f"Sampler '{cfg.sample.sampler}' not found.")
 
-        # Switch back to training mode
-        model.train()
+            sampler_fn = REGISTRY[cfg.sample.sampler]
+            x_out = sampler_fn(model, x_grid, y_grid, cfg.sample.num_steps)
+            out = grid_dir / f"samples_train_{tag}.png"
+            save_image(make_grid(denormalize(x_out).cpu(), nrow=2), out)
+
+            print(f"saved {out}\n")
+
+        finally:
+            # Switch back to training mode
+            model.train()
 
     # Perform the training loop - manual count of the loops though the dataloader
     train_step = 0
+
+    # Resume with previous weights if --resume is given
+    if args.resume:
+        print(f"Resuming - checkpoint: {args.resume}")
+        checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        train_step = checkpoint["step"]
+
+        print(f"Resumed successfully at step {train_step}")
+
+        if train_step >= int(cfg.train.steps):
+            raise SystemExit(
+                f"Checkpoint is at step {train_step}, train.steps is {cfg.train.steps}."
+            )
+
     t_last = time.perf_counter()
+    steps_at_t_last = train_step  # Track step count at last log/reset
     while train_step < int(cfg.train.steps):
         for x_1, y in dataloader:
             # Move batch to device
@@ -159,15 +202,21 @@ def main():
                     torch.cuda.synchronize()
 
                 now = time.perf_counter()
-                n = cfg.train.log_every if train_step else 1
+                n = max(1, train_step - steps_at_t_last)
                 ms = 1000.0 * (now - t_last) / n
                 t_last = now
+                steps_at_t_last = train_step
 
                 lr = scheduler.get_last_lr()[0]
-                means = (bin_sum / bin_cnt.clamp(min=1)).tolist()
+                means = (bin_sum / bin_cnt).tolist()
                 bstr = "  ".join(f"{BIN_LABELS[i]}:{m:.3f}" for i, m in enumerate(means))
                 print(f"step {train_step:>6d}  loss {loss.item():.4f}  "
                         f"lr {lr:.2e}  {ms:7.1f} ms/step  |  {bstr}")
+
+                csv_file.write(
+                    f"{train_step},{loss.item():.6f},{lr:.6e},{ms:.1f}," +
+                    ",".join("" if math.isnan(m) else f"{m:.6f}" for m in means) + "\n")
+
                 bin_sum.zero_()
                 bin_cnt.zero_()
 
@@ -178,13 +227,16 @@ def main():
 
             if train_step % GRID_EVERY == 0:
                 save_grid(f"{train_step:06d}")
-                t_last = time.perf_counter()   # don't bill the grid to ms/step
+
+                t_last = time.perf_counter()
+                steps_at_t_last = train_step
 
             if train_step >= int(cfg.train.steps):
                 break
 
     save_ckpt("last")
     save_grid("last")
+    csv_file.close()
 
 
 if __name__ == "__main__":

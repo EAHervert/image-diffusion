@@ -228,3 +228,4 @@ __pycache__/
 build/
 dist/
 checkpoints/
+logs/
