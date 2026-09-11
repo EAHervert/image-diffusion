@@ -3,16 +3,19 @@
 
 data:
   name: imagenette-128
-  root: data/imagenette2      # expects imagenette2/train/ and imagenette2/val/
+  root: data/imagenette2-320
   image_size: 128
+  num_classes: 10
   batch_size: 16
   num_workers: 4
+  hflip: true
 
 model:
   patch_size: 8
   embed_dim: 384
   depth: 12
   num_heads: 6
+  # 10 real classes + 1 reserved null row for classifier-free guidance.
   num_classes: 11
 
 train:
@@ -20,12 +23,14 @@ train:
   steps: 100_000
   optimizer: adamw
   lr: 1.0e-4
+  lr_min: 1.0e-6
   weight_decay: 0.0
   betas: [0.9, 0.999]
   eps: 1.0e-8
   warmup_frac: 0.01
   log_every: 100
   ckpt_every: 5_000
+  weights_every: 10_000 
   grid_every: 1_000
   device: mps
 

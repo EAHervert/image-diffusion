@@ -21,7 +21,6 @@ from image_diffusion.flow import sample_triple, flow_matching_loss
 from image_diffusion.model import DiT
 
 
-
 def main():
     # Parser for training parameters
     parser = argparse.ArgumentParser()
@@ -45,13 +44,19 @@ def main():
 
     print(OmegaConf.to_yaml(cfg))
 
+    # Check cfg.data and cfg.train for the necessary entries
     for k in ("num_classes", "hflip", "root"):
         if k not in cfg.data:
             raise KeyError(f"cfg.data.{k} missing!")
 
-    for k in ("steps", "lr", "seed", "grid_every"):
+    for k in ("steps", "lr", "lr_min", "seed", "grid_every", "ckpt_every", "weights_every"):        
         if k not in cfg.train:
             raise KeyError(f"cfg.train.{k} missing!")
+
+    # Check sampler - should be either euler, heun, or rk4
+    name = cfg.sample["sampler"]
+    if name not in REGISTRY:
+        raise KeyError(...)
 
     # Device casting
     device = torch.device(cfg.train.device)
@@ -81,23 +86,44 @@ def main():
         model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay,
         betas=tuple(cfg.train.betas), eps=cfg.train.eps,)
 
-    warmup = max(1, int(cfg.train.warmup_frac * cfg.train.steps))
-    scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=1e-6, end_factor=1.0, 
-        total_iters=warmup,)
+    # Scheduler includes cosine annealing to help with learning
+    warmup_steps = max(1, int(cfg.train.warmup_frac * cfg.train.steps))
+    decay_steps = max(1, cfg.train.steps - warmup_steps)
+
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=cfg.train.lr_min / cfg.train.lr, end_factor=1.0, total_iters=warmup_steps
+    )
+
+    decay_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=decay_steps, 
+        eta_min=cfg.train.lr_min
+    )
+
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, 
+        schedulers=[warmup_scheduler, decay_scheduler], 
+        milestones=[warmup_steps]
+    )
+
+    print(f"lr schedule: {cfg.train.lr_min:.1e} -> {cfg.train.lr:.1e} over {warmup_steps:,} warmup steps, ...")
 
     ckpt_dir = Path("checkpoints")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    def save_ckpt(tag):
+    def save_ckpt(tag, weights_only=False):
+        # TODO: weights_only is currently unused
         path = ckpt_dir / f"ckpt_{tag}.pt"
         ckpt = {
             "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
             "step": train_step,
             "config": OmegaConf.to_container(cfg, resolve=True),
         }
+
+        if not weights_only:
+            ckpt["optimizer"] =  optimizer.state_dict()
+            ckpt["scheduler"] = scheduler.state_dict()
+        
         tmp = path.with_suffix(".tmp")
         torch.save(ckpt, tmp)
         os.replace(tmp, path)
@@ -108,8 +134,7 @@ def main():
     GRID_EVERY = int(cfg.train.grid_every)
     bin_sum = torch.zeros(N_BINS)
     bin_cnt = torch.zeros(N_BINS)
-    BIN_LABELS = ["B1 [0.0-0.2]", "B2 [0.2-0.4]", "B3 [0.4-0.6]",
-                "B4 [0.6-0.8]", "B5 [0.8-1.0]"]
+    BIN_LABELS = ["B1 [0.0-0.2]", "B2 [0.2-0.4]", "B3 [0.4-0.6]", "B4 [0.6-0.8]", "B5 [0.8-1.0]"]
 
     grid_dir = Path("docs/assets")
     grid_dir.mkdir(parents=True, exist_ok=True)
@@ -155,6 +180,9 @@ def main():
     if args.resume:
         print(f"Resuming - checkpoint: {args.resume}")
         checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+
+        if "optimizer" not in checkpoint:
+            raise SystemExit(f"{args.resume} is a weights-only file. Need weights, optimizer, ect.")
 
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])

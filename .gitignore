@@ -229,3 +229,4 @@ build/
 dist/
 checkpoints/
 logs/
+docs/assets/trials/
