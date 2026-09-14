@@ -13,7 +13,7 @@ import torch
 from omegaconf import OmegaConf
 from torchvision.utils import make_grid, save_image
 
-from image_diffusion import REGISTRY
+from image_diffusion import REGISTRY, get_device
 from image_diffusion.data import denormalize
 from image_diffusion.model import DiT
 
@@ -27,7 +27,7 @@ def main():
 
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cfg = OmegaConf.create(ckpt["config"])
-    device = torch.device(cfg.train.device)
+    device = get_device(cfg.train.device)
 
     model = DiT(
         image_size=(cfg.data.image_size, cfg.data.image_size),

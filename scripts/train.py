@@ -15,7 +15,7 @@ from pathlib import Path
 from omegaconf import OmegaConf
 from torchvision.utils import make_grid, save_image
 
-from image_diffusion import REGISTRY
+from image_diffusion import REGISTRY, get_device
 from image_diffusion.data import build_imagenette_loader, denormalize
 from image_diffusion.flow import sample_triple, flow_matching_loss
 from image_diffusion.model import DiT
@@ -59,7 +59,7 @@ def main():
         raise KeyError(...)
 
     # Device casting
-    device = torch.device(cfg.train.device)
+    device = get_device(cfg.train.device)
 
     # Random seed for everyone
     torch.manual_seed(cfg.train.seed)

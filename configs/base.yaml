@@ -32,7 +32,7 @@ train:
   ckpt_every: 5_000
   weights_every: 10_000 
   grid_every: 1_000
-  device: mps
+  device: auto
 
 sample:
   sampler: euler
